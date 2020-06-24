@@ -1,4 +1,4 @@
-<?php if ($token = ConfigItem::getTokenByNamespace('google2fa', $staff->getId())) { ?>
+<?php if ($token = ConfigItem::getConfigsByNamespace('staff.'.$staff->getId(), 'backend2fa', 'Google2FA')) { ?>
     <tr>
         <td><?php echo __('QR Code'); ?>:
             <i class="help-tip icon-question-sign" href="#google2fa"></i>
