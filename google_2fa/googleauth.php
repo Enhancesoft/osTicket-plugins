@@ -27,21 +27,22 @@ class GoogleAuth2FAPlugin extends Plugin {
         });
     }
 
+    function uninstall() {
+        $errors = array();
+
+        self::disable();
+
+        return parent::uninstall($errors);
+    }
+
     function disable() {
-        $agents = Staff::objects()
-            ->filter(array('backend2fa'=>'google2fa'));
+        if($backend2FA = ConfigItem::getConfigsByNamespace(false, 'Google2FA'))
+            $backend2FA->delete();
 
-        if ($agents) {
-            foreach ($agents as $agent) {
-                $token = ConfigItem::getTokenByNamespace('google2fa', $agent->getId());
+        $tokens = ConfigItem::getConfigsByNamespace(false, 'backend2fa', 'Google2FA');
+        foreach($tokens as $token)
+            $token->delete();
 
-                 if ($token)
-                    $token->delete();
-
-                $agent->backend2fa = NULL;
-                $agent->save();
-            }
-        }
         return parent::disable();
     }
 }

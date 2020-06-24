@@ -4,7 +4,7 @@ require_once INCLUDE_DIR . 'class.export.php';
 
 class GoogleAuth2FA extends StaffAuthenticationBackend {
     static $name = "Google Authentication";
-    static $id = "google2fa";
+    static $id = "Google2FA";
 
     var $secretKey;
 
@@ -34,18 +34,25 @@ class GoogleAuth2FA extends StaffAuthenticationBackend {
             }
 
         }
-        $_SESSION['_staff']['google2fa'] = 'false';
-        $_SESSION['_staff']['auth']['msg'] = __('Invalid code entered. Please try again.');
+
+        if (!$isValid) {
+             $_SESSION['_staff']['google2fa'] = 'false';
+             $_SESSION['_staff']['auth']['msg'] = __('Invalid code entered. Please try again.');
+         }
     }
 
     function setSecretKey($staff, $vars) {
-        $token = ConfigItem::getTokenByNamespace('google2fa', $staff->getId());
-        if (!empty($vars['backend2fa']) && $vars['backend2fa'] == 'google2fa' && !$token) {
-            $googleAuth = new GoogleAuth2FA;
-            $googleKey = $googleAuth->getSecretKey($staff);
+        if ($vars['backend2fa'] == 'Google2FA' &&
+            !$token = ConfigItem::getConfigsByNamespace($staff->getId(), 'backend2fa', 'Google2FA')) {
+                $googleAuth = new GoogleAuth2FA;
+                $googleKey = $googleAuth->getSecretKey($staff);
 
-            $_config = new Config('google2fa');
-            $_config->set($googleKey, $staff->getId());
+                $_config = new Config('staff.'.$staff->getId());
+                $_config->set('backend2fa', 'Google2FA');
+                $staff->backend2fa = $googleKey;
+
+                $_config = new Config('staff.'.$staff->getId());
+                $_config->set('Google2FA', $googleKey);
         }
     }
 
@@ -57,11 +64,10 @@ class GoogleAuth2FA extends StaffAuthenticationBackend {
             $staff = Staff::lookup($thisstaff->getId());
         }
 
-        $token = ConfigItem::getTokenByNamespace('google2fa', $staff->getId());
-        if (!$token)
+        if (!$token = ConfigItem::getConfigsByNamespace('staff.'.$staff->getId(), 'Google2FA'))
             $this->secretKey = $googleAuth->generateSecret();
 
-        return $token->key ?: $this->secretKey;
+        return $token->value ?: $this->secretKey;
     }
 
     function getQRCode($staff=false) {
