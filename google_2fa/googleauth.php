@@ -8,23 +8,11 @@ class GoogleAuth2FAPlugin extends Plugin {
     var $config_class = "Google2FAConfig";
 
     function bootstrap() {
-        GoogleAuth2FA::bootstrap();
+        TwoFactorAuthenticationBackend::register('GoogleAuth2FABackend');
+    }
 
-        Signal::connect('agent.google2fa.register', function($staff, &$extras) {
-            StaffAuthenticationBackend::register('GoogleAuth2FA');
-        });
-
-        //Agent 2FA Configuration
-        Signal::connect('agent.account.auth', function($staff, &$extras) {
-            global $thisstaff;
-
-            if (!$thisstaff || !$thisstaff->isAdmin())
-                return;
-
-            require_once('class.google2fa.php');
-
-            include 'templates/agent-save.tmpl.php';
-        });
+    function enable() {
+        return parent::enable();
     }
 
     function uninstall() {
@@ -36,10 +24,11 @@ class GoogleAuth2FAPlugin extends Plugin {
     }
 
     function disable() {
-        if($backend2FA = ConfigItem::getConfigsByNamespace(false, 'Google2FA'))
-            $backend2FA->delete();
+        $default2fas = GoogleAuth2FABackend::getConfigsByNamespace(false, 'default_2fa', '2fa-google');
+        foreach($default2fas as $default2fa)
+            $default2fa->delete();
 
-        $tokens = ConfigItem::getConfigsByNamespace(false, 'backend2fa', 'Google2FA');
+        $tokens = GoogleAuth2FABackend::getConfigsByNamespace(false, '2fa-google');
         foreach($tokens as $token)
             $token->delete();
 

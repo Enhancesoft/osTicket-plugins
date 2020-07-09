@@ -2,72 +2,144 @@
 require('vendor/autoload.php');
 require_once INCLUDE_DIR . 'class.export.php';
 
-class GoogleAuth2FA extends StaffAuthenticationBackend {
-    static $name = "Google Authentication";
-    static $id = "Google2FA";
+class GoogleAuth2FABackend extends TwoFactorAuthenticationBackend {
+    static $id = /* @trans */ "2fa-google";
+    static $name = "Google Authenticator";
+
+    static $desc = /* @trans */ 'Verification codes are located in the Google Authenticator app on your phone';
 
     var $secretKey;
 
-    static function bootstrap() {
-        Signal::connect('agent.google2fa', array('GoogleAuth2FA', 'setSecretKey'));
-        Signal::connect('google2fa.login', array('GoogleAuth2FA', 'google2faLogin'));
+    protected function getSetupOptions() {
+        global $thisstaff;
+
+        $googleAuth = new GoogleAuth2FABackend;
+        $qrCodeURL = $googleAuth->getQRCode($thisstaff);
+        if ($googleAuth->validateQRCode($thisstaff)) {
+            return array(
+                '' => new FreeTextField(array(
+                    'configuration' => array(
+                        'content' => sprintf(
+                            '<input type="hidden" name="email" value="%s" />
+                            <em>Use the Google Authenticator application on your phone to scan and
+                                the QR Code below. If you lose the QR Code
+                                on the app, you will need to have your 2FA configurations reset by
+                                a helpdesk Administrator.</em>
+                            </br>
+                            <tr>
+                                <td>
+                                <img src="%s" alt="QR Code" />
+                                </td>
+                            </tr>',
+                            $thisstaff->getEmail(), $qrCodeURL),
+                    )
+                )),
+            );
+        }
     }
 
-    function supportsTwoFactorAuthentication() {
+    protected function getInputOptions() {
+        return array(
+            'token' => new TextboxField(array(
+                'id'=>1, 'label'=>__('Verification Code'), 'required'=>true, 'default'=>'',
+                'validator'=>'number',
+                'hint'=>__('Please enter the code from your Google Authenticator app'),
+                'configuration'=>array(
+                    'size'=>40, 'length'=>40,
+                    'autocomplete' => 'one-time-code',
+                    'inputmode' => 'numeric',
+                    'pattern' => '[0-9]*',
+                    'validator-error' => __('Invalid Code format'),
+                    ),
+            )),
+        );
+    }
+
+    function validate($form, $user) {
+        // Make sure form is valid and token exists
+        if (!($form->isValid()
+                    && ($clean=$form->getClean())
+                    && $clean['token']))
+            return false;
+
+        if (!$this->validateLoginCode($clean['token']))
+            return false;
+
+        // upstream validation might throw an exception due to expired token
+        // or too many attempts (timeout). It's the responsibility of the
+        // caller to catch and handle such exceptions.
+        $secretKey = self::getSecretKey();
+        if (!$this->_validate($secretKey))
+            return false;
+
+        // Validator doesn't do house cleaning - it's our responsibility
+        $this->onValidate($user);
+
         return true;
     }
 
-    function google2faLogin($vars) {
-        $code = is_array($vars) ? $vars['code'] : $vars;
+    function send($user) {
+        global $cfg;
 
-        if (is_null($vars))
-            $_SESSION['_staff']['auth']['msg'] = '';
-        if($code) {
-            $googleAuth = new GoogleAuth2FA;
+        // Get backend configuration for this user
+        if (!$cfg || !($info = $user->get2FAConfig($this->getId())))
+            return false;
 
-            if ($isValid = $googleAuth->validateLoginCode($code)) {
-                $staffId = $_SESSION['staff'];
-                $staff = Staff::lookup($staffId);
-                $_SESSION['_staff']['google2fa'] = 'true';
+        // get configuration
+        $config = $info['config'];
 
-                return header('Location: index.php');
-            }
+        // Generate Secret Key
+        if (!$this->secretKey)
+            $this->secretKey = self::getSecretKey($user);
 
-        }
+        $this->store($this->secretKey);
 
-        if (!$isValid) {
-             $_SESSION['_staff']['google2fa'] = 'false';
-             $_SESSION['_staff']['auth']['msg'] = __('Invalid code entered. Please try again.');
-         }
+        return true;
     }
 
-    function setSecretKey($staff, $vars) {
-        if ($vars['backend2fa'] == 'Google2FA' &&
-            !$token = ConfigItem::getConfigsByNamespace($staff->getId(), 'backend2fa', 'Google2FA')) {
-                $googleAuth = new GoogleAuth2FA;
-                $googleKey = $googleAuth->getSecretKey($staff);
+    function store($secretKey) {
+       global $thisstaff;
 
-                $_config = new Config('staff.'.$staff->getId());
-                $_config->set('backend2fa', 'Google2FA');
-                $staff->backend2fa = $googleKey;
+       $store =  &$_SESSION['_2fa'][$this->getId()];
+       $store = ['otp' => $secretKey, 'time' => time(), 'strikes' => 0];
 
-                $_config = new Config('staff.'.$staff->getId());
-                $_config->set('Google2FA', $googleKey);
-        }
+       if ($thisstaff) {
+           $config = array('config' => array('key' => $secretKey, 'external2fa' => true));
+           $_config = new Config('staff.'.$thisstaff->getId());
+           $_config->set($this->getId(), JsonDataEncoder::encode($config));
+           $thisstaff->_config = $_config->getInfo();
+           $errors['err'] = '';
+       }
+
+       return $store;
+    }
+
+    function validateLoginCode($code) {
+        $googleAuth = new \Sonata\GoogleAuthenticator\GoogleAuthenticator();
+        $secretKey = self::getSecretKey();
+
+        return $googleAuth->checkCode($secretKey, $code);
     }
 
     function getSecretKey($staff=false) {
-        $googleAuth = new \Sonata\GoogleAuthenticator\GoogleAuthenticator();
-
         if (!$staff) {
-            $thisstaff = StaffAuthenticationBackend::getUser();
-            $staff = Staff::lookup($thisstaff->getId());
+            $s = StaffAuthenticationBackend::getUser();
+            $staff = Staff::lookup($s->getId());
         }
 
-        if (!$token = ConfigItem::getConfigsByNamespace('staff.'.$staff->getId(), 'Google2FA'))
+        if (!$token = ConfigItem::getConfigsByNamespace('staff.'.$staff->getId(), '2fa-google')) {
+            $googleAuth = new \Sonata\GoogleAuthenticator\GoogleAuthenticator();
             $this->secretKey = $googleAuth->generateSecret();
+            $this->store($this->secretKey);
+        }
 
-        return $token->value ?: $this->secretKey;
+        $key = $token->value ?: $this->secretKey;
+        if (strpos($key, 'config')) {
+            $key = json_decode($key, true);
+            $key = $key['config']['key'];
+        }
+
+        return $key;
     }
 
     function getQRCode($staff=false) {
@@ -81,13 +153,6 @@ class GoogleAuth2FA extends StaffAuthenticationBackend {
         $googleAuth = new \Sonata\GoogleAuthenticator\GoogleAuthenticator();
         $secretKey = self::getSecretKey($staff);
         $code = $googleAuth->getCode($secretKey);
-
-        return $googleAuth->checkCode($secretKey, $code);
-    }
-
-    function validateLoginCode($code) {
-        $googleAuth = new \Sonata\GoogleAuthenticator\GoogleAuthenticator();
-        $secretKey = self::getSecretKey();
 
         return $googleAuth->checkCode($secretKey, $code);
     }
